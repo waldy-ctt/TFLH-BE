@@ -38,9 +38,10 @@ db.run(`
   CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
+    user_id INTEGER,
     content TEXT NOT NULL,
     reply_to_id INTEGER,
+    is_system BOOLEAN DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (conversation_id) REFERENCES conversations(id),
     FOREIGN KEY (user_id) REFERENCES users(id),
@@ -88,6 +89,14 @@ db.run(`
     UNIQUE(conversation_id, voter_user_id)
   )
 `);
+
+// Helper function to create system message
+function createSystemMessage(convId: number, content: string) {
+  db.run(
+    "INSERT INTO messages (conversation_id, content, is_system) VALUES (?, ?, 1)",
+    [convId, content]
+  );
+}
 
 const server = Bun.serve({
   port: 3000,
@@ -158,6 +167,9 @@ const server = Bun.serve({
         db.run("INSERT INTO conversations (name, created_by) VALUES (?, ?)", [name, created_by]);
         const conv = db.query("SELECT * FROM conversations ORDER BY id DESC LIMIT 1").get();
         
+        // Get creator username
+        const creator = db.query("SELECT username FROM users WHERE id = ?").get(created_by);
+        
         // Add creator as member
         db.run("INSERT INTO conversation_members (conversation_id, user_id) VALUES (?, ?)", 
           [conv.id, created_by]);
@@ -175,6 +187,9 @@ const server = Bun.serve({
             }
           }
         }
+        
+        // Create system message
+        createSystemMessage(conv.id, `🎉 ${creator.username} created this conversation`);
         
         return new Response(JSON.stringify(conv), { headers });
       }
@@ -211,7 +226,15 @@ const server = Bun.serve({
             { status: 403, headers });
         }
         
+        // Get user and old name
+        const user = db.query("SELECT username FROM users WHERE id = ?").get(user_id);
+        const oldConv = db.query("SELECT name FROM conversations WHERE id = ?").get(convId);
+        
         db.run("UPDATE conversations SET name = ? WHERE id = ?", [name, convId]);
+        
+        // Create system message
+        createSystemMessage(convId, `✏️ ${user.username} changed conversation name from "${oldConv.name}" to "${name}"`);
+        
         return new Response(JSON.stringify({ success: true }), { headers });
       }
 
@@ -233,11 +256,22 @@ const server = Bun.serve({
       // Add Member to Conversation
       if (url.pathname.match(/^\/api\/conversations\/\d+\/members$/) && req.method === "POST") {
         const convId = url.pathname.split("/")[3];
-        const { user_id } = await req.json();
+        const { user_id, added_by_id } = await req.json();
         
         try {
           db.run("INSERT INTO conversation_members (conversation_id, user_id) VALUES (?, ?)", 
             [convId, user_id]);
+          
+          // Get usernames
+          const newMember = db.query("SELECT username FROM users WHERE id = ?").get(user_id);
+          
+          if (added_by_id) {
+            const adder = db.query("SELECT username FROM users WHERE id = ?").get(added_by_id);
+            createSystemMessage(convId, `➕ ${adder.username} added ${newMember.username} to the conversation`);
+          } else {
+            createSystemMessage(convId, `➕ ${newMember.username} joined the conversation`);
+          }
+          
           return new Response(JSON.stringify({ success: true }), { headers });
         } catch (e) {
           return new Response(JSON.stringify({ error: "User already in conversation" }), 
@@ -250,8 +284,14 @@ const server = Bun.serve({
         const convId = url.pathname.split("/")[3];
         const { user_id } = await req.json();
         
+        // Get username
+        const user = db.query("SELECT username FROM users WHERE id = ?").get(user_id);
+        
         db.run("DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?", 
           [convId, user_id]);
+        
+        // Create system message
+        createSystemMessage(convId, `👋 ${user.username} left the conversation`);
         
         return new Response(JSON.stringify({ success: true }), { headers });
       }
@@ -270,7 +310,6 @@ const server = Bun.serve({
             DO UPDATE SET vote = excluded.vote
           `, [convId, target_user_id, voter_user_id, vote]);
         } catch (e) {
-          // SQLite doesn't support ON CONFLICT in older versions, try delete then insert
           db.run("DELETE FROM kick_votes WHERE conversation_id = ? AND target_user_id = ? AND voter_user_id = ?",
             [convId, target_user_id, voter_user_id]);
           db.run("INSERT INTO kick_votes (conversation_id, target_user_id, voter_user_id, vote) VALUES (?, ?, ?, ?)",
@@ -287,11 +326,18 @@ const server = Bun.serve({
         ).get(convId, target_user_id).count;
         
         if (yesVotes >= totalMembers * 0.7) {
+          // Get usernames
+          const target = db.query("SELECT username FROM users WHERE id = ?").get(target_user_id);
+          
           // Kick the user
           db.run("DELETE FROM conversation_members WHERE conversation_id = ? AND user_id = ?", 
             [convId, target_user_id]);
           db.run("DELETE FROM kick_votes WHERE conversation_id = ? AND target_user_id = ?",
             [convId, target_user_id]);
+          
+          // Create system message
+          createSystemMessage(convId, `⚠️ ${target.username} was removed from the conversation`);
+          
           return new Response(JSON.stringify({ success: true, kicked: true }), { headers });
         }
         
@@ -389,7 +435,7 @@ const server = Bun.serve({
              JOIN users u2 ON mr.user_id = u2.id
              WHERE mr.message_id = m.id) as reactions_json
           FROM messages m 
-          JOIN users u ON m.user_id = u.id 
+          LEFT JOIN users u ON m.user_id = u.id 
           WHERE m.conversation_id = ?
           ORDER BY m.created_at ASC
         `).all(convId);
@@ -401,13 +447,14 @@ const server = Bun.serve({
             replyToMessage = db.query(`
               SELECT m.id, m.content, u.username
               FROM messages m
-              JOIN users u ON m.user_id = u.id
+              LEFT JOIN users u ON m.user_id = u.id
               WHERE m.id = ?
             `).get(msg.reply_to_id);
           }
           
           return {
             ...msg,
+            username: msg.username || "System",
             reactions: msg.reactions_json ? JSON.parse(msg.reactions_json).filter(r => r.user_id) : [],
             reply_to: replyToMessage
           };
