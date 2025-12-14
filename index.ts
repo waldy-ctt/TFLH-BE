@@ -394,11 +394,24 @@ const server = Bun.serve({
           ORDER BY m.created_at ASC
         `).all(convId);
         
-        // Parse reactions JSON
-        const parsedMessages = messages.map(msg => ({
-          ...msg,
-          reactions: msg.reactions_json ? JSON.parse(msg.reactions_json).filter(r => r.user_id) : []
-        }));
+        // Parse reactions JSON and get reply information
+        const parsedMessages = messages.map(msg => {
+          let replyToMessage = null;
+          if (msg.reply_to_id) {
+            replyToMessage = db.query(`
+              SELECT m.id, m.content, u.username
+              FROM messages m
+              JOIN users u ON m.user_id = u.id
+              WHERE m.id = ?
+            `).get(msg.reply_to_id);
+          }
+          
+          return {
+            ...msg,
+            reactions: msg.reactions_json ? JSON.parse(msg.reactions_json).filter(r => r.user_id) : [],
+            reply_to: replyToMessage
+          };
+        });
         
         return new Response(JSON.stringify(parsedMessages), { headers });
       }
@@ -428,7 +441,18 @@ const server = Bun.serve({
           ORDER BY m.id DESC LIMIT 1
         `).get();
         
-        return new Response(JSON.stringify({ ...msg, reactions: [] }), { headers });
+        // Get reply information if exists
+        let replyToMessage = null;
+        if (msg.reply_to_id) {
+          replyToMessage = db.query(`
+            SELECT m.id, m.content, u.username
+            FROM messages m
+            JOIN users u ON m.user_id = u.id
+            WHERE m.id = ?
+          `).get(msg.reply_to_id);
+        }
+        
+        return new Response(JSON.stringify({ ...msg, reactions: [], reply_to: replyToMessage }), { headers });
       }
 
       // Delete Message
