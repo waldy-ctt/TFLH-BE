@@ -60,14 +60,8 @@ echo -e "${GREEN}✅ Code updated${NC}"
 
 echo -e "${YELLOW}🐳 Step 3: Building Docker image${NC}"
 
-# Build with minimal resources
-docker build \
-    --memory="512m" \
-    --memory-swap="1g" \
-    --cpus="0.5" \
-    -t tflh-backend:latest \
-    -f Dockerfile \
-    .
+# Build Docker image (simplified for compatibility)
+docker build -t tflh-backend:latest .
 
 echo -e "${GREEN}✅ Docker image built${NC}"
 
