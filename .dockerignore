@@ -1,0 +1,42 @@
+# Git files
+.git
+.gitignore
+
+# Node/Bun files
+node_modules
+*.log
+npm-debug.log*
+
+# Development files
+*.md
+README.md
+.env.example
+
+# Build files
+dist
+build
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+
+# Test files
+test
+tests
+*.test.ts
+*.spec.ts
+
+# Database files (will be mounted as volume)
+*.db
+*.db-shm
+*.db-wal
+
+# Docker files (except the one we need)
+.dockerignore
+docker-compose.override.yml
+
+# OS files
+.DS_Store
+Thumbs.db

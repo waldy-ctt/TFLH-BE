@@ -1,6 +1,18 @@
 import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync } from "fs";
+import { join } from "path";
 
-export const db = new Database("chat.db");
+// Use data directory for production, current dir for dev
+const isProduction = process.env.NODE_ENV === "production";
+const dbDir = isProduction ? "/app/data" : "./";
+const dbPath = join(dbDir, "chat.db");
+
+// Ensure data directory exists
+if (!existsSync(dbDir)) {
+  mkdirSync(dbDir, { recursive: true });
+}
+
+export const db = new Database(dbPath);
 
 export function initializeDatabase() {
   // Users table
@@ -97,5 +109,5 @@ export function initializeDatabase() {
     )
   `);
 
-  console.log("✅ Database initialized");
+  console.log(`✅ Database initialized at: ${dbPath}`);
 }

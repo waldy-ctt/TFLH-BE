@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  tflh-backend:
+    build: .
+    container_name: tflh-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist SQLite database
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+    # Resource limits for potato VPS
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    networks:
+      - tflh-network
+
+networks:
+  tflh-network:
+    driver: bridge
