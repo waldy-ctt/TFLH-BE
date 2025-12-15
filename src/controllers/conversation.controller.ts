@@ -3,6 +3,7 @@ import { UserModel } from "../models/user.model";
 import { MessageModel } from "../models/message.model";
 import { VoteModel } from "../models/vote.model";
 import { successResponse, errorResponse } from "../utils/response";
+import { broadcastToConversation } from "../index";
 
 export async function createConversation(req: Request) {
   const { name, created_by, member_ids } = await req.json();
@@ -10,24 +11,25 @@ export async function createConversation(req: Request) {
   const conv = ConversationModel.create(name, created_by);
   const creator = UserModel.findById(created_by);
   
-  // Add creator as member
   ConversationModel.addMember(conv.id, created_by);
   
-  // Add selected members
   if (member_ids && Array.isArray(member_ids)) {
     for (const userId of member_ids) {
       if (userId !== created_by) {
         try {
           ConversationModel.addMember(conv.id, userId);
-        } catch (e) {
-          // Skip if already added
-        }
+        } catch (e) {}
       }
     }
   }
   
-  // Create system message
   MessageModel.createSystem(conv.id, `🎉 ${creator?.username} created this conversation`);
+  
+  // Broadcast to all members
+  broadcastToConversation(conv.id, {
+    type: "conversation_created",
+    conversation: conv
+  });
   
   return successResponse(conv);
 }
@@ -55,6 +57,13 @@ export async function updateConversationName(url: URL, req: Request) {
     convId,
     `✏️ ${user?.username} changed conversation name from "${oldConv?.name}" to "${name}"`
   );
+  
+  // Broadcast name change to all members
+  broadcastToConversation(convId, {
+    type: "conversation_updated",
+    conversationId: convId,
+    name
+  }, user_id);
   
   return successResponse({ success: true });
 }
@@ -87,6 +96,22 @@ export async function addMember(url: URL, req: Request) {
       );
     }
     
+    // Broadcast member added to existing members
+    broadcastToConversation(convId, {
+      type: "member_added",
+      conversationId: convId,
+      userId: user_id,
+      username: newMember?.username
+    }, user_id);
+    
+    // Send special event to the newly added member with full conversation info
+    const { broadcastToUser } = require("../index");
+    const conversation = ConversationModel.findById(convId);
+    broadcastToUser(user_id, {
+      type: "joined_conversation",
+      conversation: conversation
+    });
+    
     return successResponse({ success: true });
   } catch (e) {
     return errorResponse("User already in conversation", 409);
@@ -101,6 +126,13 @@ export async function leaveConversation(url: URL, req: Request) {
   
   ConversationModel.removeMember(convId, user_id);
   MessageModel.createSystem(convId, `👋 ${user?.username} left the conversation`);
+  
+  // Broadcast member left
+  broadcastToConversation(convId, {
+    type: "member_left",
+    conversationId: convId,
+    userId: user_id
+  }, user_id);
   
   return successResponse({ success: true });
 }
@@ -121,6 +153,13 @@ export async function voteKick(url: URL, req: Request) {
     VoteModel.deleteKickVotes(convId, target_user_id);
     
     MessageModel.createSystem(convId, `⚠️ ${target?.username} was removed from the conversation`);
+    
+    // Broadcast member kicked
+    broadcastToConversation(convId, {
+      type: "member_kicked",
+      conversationId: convId,
+      userId: target_user_id
+    });
     
     return successResponse({ success: true, kicked: true });
   }
@@ -149,12 +188,17 @@ export async function voteDeleteConversation(url: URL, req: Request) {
   const yesVotes = VoteModel.getDeleteYesVotes(convId);
   
   if (yesVotes === totalMembers) {
-    // Delete all related data
     MessageModel.deleteByConversation(convId);
-    ConversationModel.removeMember(convId, voter_user_id); // Remove all members
+    ConversationModel.removeMember(convId, voter_user_id);
     VoteModel.deleteKickVotesByConversation(convId);
     VoteModel.deleteDeleteVotes(convId);
     ConversationModel.delete(convId);
+    
+    // Broadcast conversation deleted
+    broadcastToConversation(convId, {
+      type: "conversation_deleted",
+      conversationId: convId
+    });
     
     return successResponse({ success: true, deleted: true });
   }
